@@ -20,6 +20,9 @@ import (
 //go:embed index.html
 var indexHTML string
 
+// 由构建脚本通过 -ldflags 注入版本号
+var version = "dev"
+
 var validPassword = regexp.MustCompile(`^[a-zA-Z0-9]+$`)
 
 func main() {
