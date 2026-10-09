@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文件管理器</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f0f2f5; min-height: 100vh; }
+.container { max-width: 900px; margin: 40px auto; padding: 0 16px; }
+.card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.08); padding: 24px; }
+h1 { font-size: 22px; margin-bottom: 20px; color: #1f2329; }
+.login-box { max-width: 360px; margin: 100px auto; }
+.form-item { margin-bottom: 16px; }
+.form-item label { display: block; font-size: 14px; color: #4e5969; margin-bottom: 6px; }
+.form-item input { width: 100%; padding: 10px 12px; border: 1px solid #d0d5dd; border-radius: 6px; font-size: 14px; }
+.form-item input:focus { outline: none; border-color: #3370ff; }
+.btn { display: inline-block; padding: 8px 16px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; background: #3370ff; color: #fff; }
+.btn:hover { background: #2860e1; }
+.btn-gray { background: #f2f3f5; color: #1f2329; }
+.btn-gray:hover { background: #e5e6eb; }
+.btn-red { background: #f54a45; }
+.btn-red:hover { background: #d9303a; }
+.btn-sm { padding: 4px 10px; font-size: 13px; }
+.toolbar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+.error-msg { color: #f54a45; font-size: 14px; margin-top: 12px; min-height: 20px; }
+.ok-msg { color: #00b42a; font-size: 14px; margin-top: 12px; min-height: 20px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #eceef1; font-size: 14px; }
+th { color: #86909c; font-weight: 500; background: #f7f8fa; }
+td.name { color: #1f2329; }
+td.size { color: #86909c; white-space: nowrap; }
+.dir-icon { margin-right: 4px; }
+.empty { text-align: center; color: #86909c; padding: 30px 0; }
+</style>
+</head>
+<body>
+<div id="login-view" class="login-box card">
+  <h1>文件管理器登录</h1>
+  <div class="form-item">
+    <label>用户名</label>
+    <input type="text" id="username" autocomplete="username">
+  </div>
+  <div class="form-item">
+    <label>密码</label>
+    <input type="password" id="password" autocomplete="current-password">
+  </div>
+  <button class="btn" style="width:100%" onclick="login()">登 录</button>
+  <div id="login-error" class="error-msg"></div>
+</div>
+
+<div id="files-view" class="container" style="display:none">
+  <div class="card">
+    <h1>文件管理器</h1>
+    <div class="toolbar">
+      <input type="file" id="upload-input" style="display:none" onchange="doUpload(this.files[0])">
+      <button class="btn" onclick="document.getElementById('upload-input').click()">上传文件</button>
+      <input type="file" id="extract-input" style="display:none" onchange="doExtract(this.files[0])">
+      <button class="btn" onclick="document.getElementById('extract-input').click()">解压归档</button>
+      <button class="btn btn-gray" onclick="doCompress()">压缩并下载</button>
+      <button class="btn btn-gray" onclick="loadFiles()">刷新</button>
+      <button class="btn btn-gray" onclick="showPwdModal()">修改密码</button>
+      <button class="btn btn-red" style="margin-left:auto" onclick="logout()">退出登录</button>
+    </div>
+    <div id="msg" class="ok-msg"></div>
+    <div class="path-bar" style="display:flex; align-items:center; margin-bottom:12px;">
+      <button class="btn btn-sm btn-gray" id="up-btn" style="display:none" onclick="goUp()">返回上级</button>
+      <span id="cur-path" style="margin-left:8px; color:#4e5969; font-size:14px;">当前位置: /</span>
+    </div>
+    <table>
+      <thead><tr><th>名称</th><th>大小</th><th style="width:150px">操作</th></tr></thead>
+      <tbody id="file-list"></tbody>
+    </table>
+    <div id="empty" class="empty" style="display:none">目录为空</div>
+  </div>
+</div>
+
+<div id="pwd-modal" style="display:none; position:fixed; left:0; top:0; right:0; bottom:0; background:rgba(0,0,0,.4); align-items:center; justify-content:center; z-index:10">
+  <div class="card" style="width:360px">
+    <h1>修改密码</h1>
+    <div class="form-item">
+      <label>旧密码</label>
+      <input type="password" id="old-password" autocomplete="current-password">
+    </div>
+    <div class="form-item">
+      <label>新密码(只能包含字母和数字)</label>
+      <input type="password" id="new-password" autocomplete="new-password">
+    </div>
+    <div class="form-item">
+      <label>确认新密码</label>
+      <input type="password" id="confirm-password" autocomplete="new-password">
+    </div>
+    <button class="btn" style="width:100%" onclick="doChangePassword()">确认修改</button>
+    <button class="btn btn-gray" style="width:100%;margin-top:10px" onclick="hidePwdModal()">取消</button>
+    <div id="pwd-error" class="error-msg"></div>
+  </div>
+</div>
+
+<script>
+var authHeader = null;
+var currentUser = null;
+var curDir = "";
+
+function b64(str) {
+  return btoa(unescape(encodeURIComponent(str)));
+}
+
+function api(path, opts) {
+  opts = opts || {};
+  opts.headers = opts.headers || {};
+  if (authHeader) { opts.headers["Authorization"] = authHeader; }
+  return fetch(path, opts);
+}
+
+function fmtSize(n) {
+  if (n < 1024) { return n + " B"; }
+  if (n < 1048576) { return (n / 1024).toFixed(1) + " KB"; }
+  if (n < 1073741824) { return (n / 1048576).toFixed(1) + " MB"; }
+  return (n / 1073741824).toFixed(1) + " GB";
+}
+
+function showMsg(text, ok) {
+  var el = document.getElementById("msg");
+  el.textContent = text;
+  el.className = ok ? "ok-msg" : "error-msg";
+  setTimeout(function () { el.textContent = ""; }, 4000);
+}
+
+async function login() {
+  var u = document.getElementById("username").value;
+  var p = document.getElementById("password").value;
+  if (!u || !p) {
+    document.getElementById("login-error").textContent = "请输入用户名和密码";
+    return;
+  }
+  authHeader = "Basic " + b64(u + ":" + p);
+  var r = await api("/files");
+  if (r.status === 401) {
+    document.getElementById("login-error").textContent = "用户名或密码错误";
+    return;
+  }
+  if (!r.ok) {
+    document.getElementById("login-error").textContent = "服务异常: " + r.status;
+    return;
+  }
+  document.getElementById("login-error").textContent = "";
+  document.getElementById("login-view").style.display = "none";
+  document.getElementById("files-view").style.display = "block";
+  currentUser = u;
+  curDir = "";
+  renderFiles(await r.json());
+}
+
+function logout() {
+  authHeader = null;
+  currentUser = null;
+  curDir = "";
+  document.getElementById("username").value = "";
+  document.getElementById("password").value = "";
+  document.getElementById("files-view").style.display = "none";
+  document.getElementById("login-view").style.display = "block";
+}
+
+function updatePathBar() {
+  document.getElementById("cur-path").textContent = "当前位置: /" + curDir;
+  document.getElementById("up-btn").style.display = curDir ? "inline-block" : "none";
+}
+
+function goUp() {
+  if (!curDir) { return; }
+  var idx = curDir.lastIndexOf("/");
+  curDir = idx === -1 ? "" : curDir.substring(0, idx);
+  loadFiles();
+}
+
+function enterDir(name) {
+  curDir = curDir ? curDir + "/" + name : name;
+  loadFiles();
+}
+
+async function loadFiles() {
+  var q = curDir ? "?path=" + encodeURIComponent(curDir) : "";
+  var r = await api("/files" + q);
+  if (r.status === 401) { logout(); return; }
+  if (!r.ok) { showMsg("读取目录失败", false); return; }
+  updatePathBar();
+  renderFiles(await r.json());
+}
+
+function renderFiles(data) {
+  var tbody = document.getElementById("file-list");
+  tbody.innerHTML = "";
+  var files = data.files || [];
+  document.getElementById("empty").style.display = files.length ? "none" : "block";
+  files.sort(function (a, b) {
+    if (a.isDir !== b.isDir) { return a.isDir ? -1 : 1; }
+    return a.name.localeCompare(b.name);
+  });
+  files.forEach(function (f) {
+    var tr = document.createElement("tr");
+    var tdName = document.createElement("td");
+    tdName.className = "name";
+    tdName.textContent = (f.isDir ? "[目录] " : "") + f.name;
+    var tdSize = document.createElement("td");
+    tdSize.className = "size";
+    tdSize.textContent = f.isDir ? "-" : fmtSize(f.size);
+    var tdOps = document.createElement("td");
+    if (f.isDir) {
+      var btnEnter = document.createElement("button");
+      btnEnter.className = "btn btn-sm btn-gray";
+      btnEnter.textContent = "进入";
+      btnEnter.onclick = function () { enterDir(f.name); };
+      tdOps.appendChild(btnEnter);
+    } else {
+      var btnDl = document.createElement("button");
+      btnDl.className = "btn btn-sm";
+      btnDl.textContent = "下载";
+      btnDl.onclick = function () { doDownload(f.name); };
+      tdOps.appendChild(btnDl);
+    }
+    var btnDel = document.createElement("button");
+    btnDel.className = "btn btn-sm btn-red";
+    btnDel.style.marginLeft = "6px";
+    btnDel.textContent = "删除";
+    btnDel.onclick = function () { doDelete(f.name, f.isDir); };
+    tdOps.appendChild(btnDel);
+    tr.appendChild(tdName);
+    tr.appendChild(tdSize);
+    tr.appendChild(tdOps);
+    tbody.appendChild(tr);
+  });
+}
+
+function fullRelPath(name) {
+  return curDir ? curDir + "/" + name : name;
+}
+
+async function doDownload(name) {
+  var r = await api("/download/" + encodeURIComponent(fullRelPath(name)));
+  if (!r.ok) { showMsg("下载失败", false); return; }
+  saveBlob(await r.blob(), name);
+}
+
+async function doUpload(file) {
+  if (!file) { return; }
+  var fd = new FormData();
+  fd.append("file", file);
+  fd.append("path", curDir);
+  var r = await api("/upload", { method: "POST", body: fd });
+  if (!r.ok) { showMsg("上传失败", false); return; }
+  showMsg("上传成功: " + file.name, true);
+  loadFiles();
+}
+
+async function doDelete(name, isDir) {
+  if (!confirm((isDir ? "删除目录" : "删除文件") + ' "' + name + '" ?')) { return; }
+  var r = await api("/delete/" + encodeURIComponent(fullRelPath(name)), { method: "DELETE" });
+  if (!r.ok) { showMsg("删除失败", false); return; }
+  showMsg("删除成功: " + name, true);
+  loadFiles();
+}
+
+async function doCompress() {
+  showMsg("正在压缩...", true);
+  var q = curDir ? "?path=" + encodeURIComponent(curDir) : "";
+  var r = await api("/compress" + q, { method: "POST" });
+  if (!r.ok) { showMsg("压缩失败", false); return; }
+  saveBlob(await r.blob(), "archive.tar.gz");
+  showMsg("压缩完成", true);
+}
+
+async function doExtract(file) {
+  if (!file) { return; }
+  var fd = new FormData();
+  fd.append("archive", file);
+  fd.append("path", curDir);
+  var r = await api("/extract", { method: "POST", body: fd });
+  if (!r.ok) { showMsg("解压失败", false); return; }
+  showMsg("解压成功: " + file.name, true);
+  loadFiles();
+}
+
+function saveBlob(blob, name) {
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
+
+function showPwdModal() {
+  document.getElementById("old-password").value = "";
+  document.getElementById("new-password").value = "";
+  document.getElementById("confirm-password").value = "";
+  document.getElementById("pwd-error").textContent = "";
+  document.getElementById("pwd-modal").style.display = "flex";
+}
+
+function hidePwdModal() {
+  document.getElementById("pwd-modal").style.display = "none";
+}
+
+async function doChangePassword() {
+  var oldPwd = document.getElementById("old-password").value;
+  var newPwd = document.getElementById("new-password").value;
+  var confirmPwd = document.getElementById("confirm-password").value;
+  var errEl = document.getElementById("pwd-error");
+  if (!oldPwd || !newPwd) {
+    errEl.textContent = "请输入旧密码和新密码";
+    return;
+  }
+  if (!/^[A-Za-z0-9]+$/.test(newPwd)) {
+    errEl.textContent = "新密码只能包含字母和数字";
+    return;
+  }
+  if (newPwd !== confirmPwd) {
+    errEl.textContent = "两次输入的新密码不一致";
+    return;
+  }
+  var r = await api("/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ old_password: oldPwd, new_password: newPwd })
+  });
+  var data = await r.json().catch(function () { return {}; });
+  if (r.status === 401) {
+    if (data.error === "用户名或密码错误") { logout(); return; }
+    errEl.textContent = data.error || "旧密码错误";
+    return;
+  }
+  if (!r.ok) {
+    errEl.textContent = data.error || "修改失败";
+    return;
+  }
+  authHeader = "Basic " + b64(currentUser + ":" + newPwd);
+  hidePwdModal();
+  showMsg("密码修改成功,请牢记新密码", true);
+}
+</script>
+</body>
+</html>
